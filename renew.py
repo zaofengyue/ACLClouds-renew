@@ -1,10 +1,10 @@
 import os
 import re
 import time
+import json
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-username = os.environ.get("ACL_USERNAME", "")
-password = os.environ.get("ACL_PASSWORD", "")
+cookies_str = os.environ.get("ACL_COOKIES", "")
 
 def log(msg):
     print(f"[INFO] {msg}")
@@ -19,38 +19,36 @@ def parse_expires_minutes(text):
         total += int(mins.group(1))
     return total
 
+def parse_cookies(cookie_str):
+    """将 Cookie 字符串解析为 Playwright 格式"""
+    cookies = []
+    for item in cookie_str.split(";"):
+        item = item.strip()
+        if "=" in item:
+            name, value = item.split("=", 1)
+            cookies.append({
+                "name": name.strip(),
+                "value": value.strip(),
+                "domain": "dash.aclclouds.com",
+                "path": "/"
+            })
+    return cookies
+
 with sync_playwright() as p:
-    # 关闭 headless，配合 xvfb 运行
-    browser = p.chromium.launch(headless=False)
-    page = browser.new_page()
+    browser = p.chromium.launch(headless=True)  # 可以回到 headless 了
+    context = browser.new_context()
 
-    # ============ 1. 登录 ============
-    log("正在打开登录页...")
-    page.goto("https://dash.aclclouds.com/login", wait_until="networkidle")
-    page.screenshot(path="00_before_login.png")
+    # ============ 1. 注入 Cookie，跳过登录 ============
+    log("注入 Cookie...")
+    context.add_cookies(parse_cookies(cookies_str))
+    page = context.new_page()
 
-    inputs = page.locator('input')
-    inputs.nth(0).fill(username)
-    inputs.nth(1).fill(password)
-
-    # 点击自定义 checkbox
-    checkbox = page.locator('div.auth-captcha-inner[role="checkbox"]')
-    checkbox.click()
-    time.sleep(2)
-    page.screenshot(path="00_checkbox.png")
-    log("验证勾选完成")
-
-    # 点击登录按钮
-    page.click('button[type="submit"]')
-    page.wait_for_load_state("networkidle")
-    page.screenshot(path="01_after_login.png")
-    log("登录完成")
-
-    # ============ 2. 进入项目页面，收集链接 ============
-    log("正在进入项目页面...")
+    # 直接访问项目页，验证是否已登录
     page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
-    page.screenshot(path="02_projects.png")
+    page.screenshot(path="01_projects.png")
+    log("Cookie 注入完成，已进入项目页")
 
+    # ============ 2. 收集项目链接 ============
     project_links = page.locator('a[href*="/projects/"]').all()
     hrefs = []
     for link in project_links:
@@ -60,7 +58,7 @@ with sync_playwright() as p:
     log(f"找到 {len(hrefs)} 个项目")
 
     if len(hrefs) == 0:
-        log("未找到任何项目，请检查登录状态或选择器")
+        log("未找到项目，Cookie 可能已过期")
         page.screenshot(path="error_no_projects.png")
         browser.close()
         exit(1)
@@ -99,7 +97,7 @@ with sync_playwright() as p:
                         time.sleep(2)
                     log("续期成功")
                 else:
-                    log("续期按钮不可见，可能尚未到续期窗口期")
+                    log("续期按钮不可见，未到续期窗口期")
             except PlaywrightTimeout:
                 log("续期操作超时")
             page.screenshot(path=f"project_{idx+1}_02_after_renew.png")
