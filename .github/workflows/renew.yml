@@ -39,4 +39,4 @@ jobs:
         with:
           name: Screenshots-${{ github.run_number }}
           path: "*.png"
-          retention-days: 3
+          retention-days: 1
